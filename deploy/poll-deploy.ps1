@@ -11,9 +11,11 @@ $ProgressPreference = 'SilentlyContinue'
 
 $LogFile = Join-Path (Split-Path $AppDir -Parent) 'poll-deploy.log'
 
+# Write-Host, nao Write-Output: se escrevesse no stream de saida, as linhas de log
+# emitidas dentro de uma funcao entrariam no valor de retorno dela.
 function Write-Log($msg) {
     $line = "[{0}] {1}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $msg
-    Write-Output $line
+    Write-Host $line
     Add-Content -Path $LogFile -Value $line -ErrorAction SilentlyContinue
 }
 
@@ -52,7 +54,7 @@ try {
         $before = (& git rev-parse HEAD).Trim()
 
         if ((Invoke-Git fetch origin $Branch) -ne 0) {
-            throw "git fetch falhou - rede indisponivel, tentando de novo no proximo ciclo"
+            throw "git fetch falhou (rede indisponivel?) - nova tentativa no proximo ciclo"
         }
 
         $after = (& git rev-parse "origin/$Branch").Trim()
