@@ -1,11 +1,11 @@
-# Nao usamos ErrorActionPreference='Stop' aqui: uv e uvicorn escrevem mensagens
-# normais em stderr, o que viraria erro terminante quando este script e chamado
-# com a saida redirecionada. Verificamos exit codes explicitamente.
+# Nao usamos ErrorActionPreference='Stop': uv escreve mensagens normais em stderr,
+# o que viraria erro terminante quando este script e chamado com a saida redirecionada.
+# O sucesso e avaliado por exit code e pelo estado da porta.
 $ErrorActionPreference = 'Continue'
 $ProgressPreference = 'SilentlyContinue'
 
-$Port = 9577
-$ProjectDir = $PWD.Path
+$Port     = 9577
+$TaskName = 'teste-ssh-app'
 
 $uvLocal = Join-Path $env:USERPROFILE '.local\bin'
 if ((Test-Path (Join-Path $uvLocal 'uv.exe')) -and ($env:Path -notlike "*$uvLocal*")) {
@@ -30,30 +30,35 @@ if ($LASTEXITCODE -ne 0) {
     exit 1
 }
 
-Write-Output "Derrubando processo anterior na porta $Port (se existir)..."
+$task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+if (-not $task) {
+    Write-Output "ERRO: tarefa '$TaskName' nao existe. Rode deploy\install-scheduled-task.ps1 como Administrador."
+    exit 1
+}
+
+Write-Output "Reiniciando a tarefa '$TaskName'..."
+Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+
+# Encerra qualquer resto que ainda segure a porta antes de subir de novo.
 $existing = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue
 if ($existing) {
-    $existing | ForEach-Object {
-        Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue
-    }
+    $existing | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }
     Start-Sleep -Seconds 2
 }
 
-Write-Output "Subindo aplicacao na porta $Port..."
-$uvExe = (Get-Command uv).Source
-Start-Process -FilePath $uvExe `
-    -ArgumentList 'run', 'uvicorn', 'main:app', '--host', '0.0.0.0', '--port', "$Port" `
-    -WorkingDirectory $ProjectDir `
-    -WindowStyle Hidden `
-    -RedirectStandardOutput "$ProjectDir\app.out.log" `
-    -RedirectStandardError "$ProjectDir\app.err.log"
+Start-ScheduledTask -TaskName $TaskName
 
-Start-Sleep -Seconds 5
-$check = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue
-if ($check) {
+# A primeira subida pode baixar o interpretador, entao damos ate 60s.
+$deadline = (Get-Date).AddSeconds(60)
+do {
+    Start-Sleep -Seconds 3
+    $listening = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue
+} while (-not $listening -and (Get-Date) -lt $deadline)
+
+if ($listening) {
     Write-Output "Deploy OK - aplicacao escutando na porta $Port"
 } else {
-    Write-Output "ATENCAO: porta $Port nao esta escutando. Conteudo de app.err.log:"
-    Get-Content "$ProjectDir\app.err.log" -ErrorAction SilentlyContinue | Select-Object -Last 20
+    Write-Output "ATENCAO: porta $Port nao esta escutando. Ultimas linhas de app.log:"
+    Get-Content (Join-Path $PWD.Path 'app.log') -Tail 20 -ErrorAction SilentlyContinue
     exit 1
 }
