@@ -7,6 +7,9 @@ from pydantic import BaseModel
 
 DB_PATH = Path(__file__).parent / "app.db"
 
+# Alterar a cada deploy serve como prova de que a nova versao entrou no ar.
+APP_VERSION = "2"
+
 
 def get_conn() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH)
@@ -45,7 +48,7 @@ class Item(ItemIn):
 
 @app.get("/health")
 def health():
-    return {"status": "ok"}
+    return {"status": "ok", "version": APP_VERSION}
 
 
 @app.get("/items", response_model=list[Item])
