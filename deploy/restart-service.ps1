@@ -1,24 +1,7 @@
 $ErrorActionPreference = "Stop"
 
-$ProjectDir = "C:\Users\cloud\project-ssh-py-api"
-$RepoUrl    = $env:REPO_URL
-$Port       = 9577
-
-if (-not (Test-Path $ProjectDir)) {
-    New-Item -ItemType Directory -Path $ProjectDir -Force | Out-Null
-}
-
-Set-Location $ProjectDir
-
-if (Test-Path (Join-Path $ProjectDir ".git")) {
-    Write-Host "Repo existente, atualizando com git pull..."
-    git remote set-url origin $RepoUrl
-    git fetch origin
-    git reset --hard origin/main
-} else {
-    Write-Host "Clonando repositorio..."
-    git clone $RepoUrl .
-}
+$Port = 9577
+$ProjectDir = $PWD.Path
 
 if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
     Write-Host "uv nao encontrado, instalando..."

@@ -1,7 +1,7 @@
 # ssh-teste-deploy-py
 
-CRUD simples (FastAPI + SQLite, gerenciado com `uv`) para testar um pipeline de deploy:
-push no GitHub → GitHub Actions → SSH numa máquina Windows → `git pull` + restart do serviço na porta 9577.
+CRUD simples (FastAPI + SQLite, gerenciado com `uv`) usado para testar estratégias de deploy
+numa máquina Windows atrás de firewall restritivo. A aplicação roda na porta **9577**.
 
 ## Rodar localmente
 
@@ -12,26 +12,50 @@ uv run uvicorn main:app --reload
 
 Endpoints: `GET/POST /items`, `GET/PUT/DELETE /items/{id}`, `GET /health`.
 
-## Deploy automático
+## Restrição de rede da máquina de destino
 
-O workflow [`.github/workflows/deploy.yml`](.github/workflows/deploy.yml) roda a cada push em `main`:
+A máquina alvo tem uma allowlist de saída que libera só parte do GitHub:
 
-1. Conecta via SSH na máquina Windows (`SSH_HOST:SSH_PORT`).
-2. Executa [`deploy/deploy.ps1`](deploy/deploy.ps1), que:
-   - clona o repo em `C:\Users\cloud\project-ssh-py-api` (ou dá `git fetch` + `reset --hard origin/main` se já existir);
-   - instala o `uv` na máquina se não estiver presente;
-   - roda `uv sync`;
-   - mata o processo que estiver escutando na porta 9577 (deploy anterior);
-   - sobe a aplicação em background (`uv run uvicorn main:app --port 9577`), com logs em `app.out.log` / `app.err.log`.
-
-### Secrets necessários (Settings → Secrets and variables → Actions)
-
-| Secret | Valor |
+| Host | Status |
 |---|---|
-| `SSH_HOST` | `besc-orders-api.defenseti.com.br` |
-| `SSH_PORT` | `9585` |
-| `SSH_USERNAME` | `cloud` |
-| `SSH_PASSWORD` | senha do usuário `cloud` |
-| `GH_PAT` | Personal Access Token com escopo `repo` (necessário só se o repositório for privado, para o `git clone`/`git fetch` na máquina Windows) |
+| `github.com`, `api.github.com`, `codeload.github.com` | acessível (intermitente) |
+| `objects.githubusercontent.com`, `vstoken.actions.githubusercontent.com` | acessível |
+| `pipelines*.actions.githubusercontent.com` | **bloqueado** (timeout) |
 
-Nenhuma credencial fica no código — tudo vem de secrets injetados em tempo de execução.
+Também não aceita conexão SSH de entrada vinda dos runners hospedados do GitHub.
+
+Consequências:
+
+- **Deploy via SSH a partir de runner hospedado**: inviável — o runner não alcança a máquina.
+- **Runner self-hosted**: inviável enquanto `*.actions.githubusercontent.com` estiver bloqueado —
+  o runner registra, mas nunca recebe job.
+- **Polling** (estratégia atual): funciona, porque só depende de `github.com` / `codeload.github.com`
+  e tolera a instabilidade via retry a cada ciclo.
+
+## Deploy por polling (estratégia ativa)
+
+Uma tarefa agendada roda [`deploy/poll-deploy.ps1`](deploy/poll-deploy.ps1) a cada 5 minutos:
+
+1. `git fetch` no repositório; se o `HEAD` local já é igual ao `origin/main`, encerra sem fazer nada.
+2. Havendo commit novo, `git reset --hard origin/main` e chama
+   [`deploy/restart-service.ps1`](deploy/restart-service.ps1), que sincroniza deps com `uv sync`,
+   derruba o processo na porta 9577 e sobe a nova versão.
+3. Tudo é registrado em `poll-deploy.log`, ao lado da pasta da aplicação.
+
+Se a rede estiver fora no momento do ciclo, o `git fetch` falha, o script sai com erro e a
+próxima execução (5 min depois) tenta de novo — sem intervenção.
+
+### Instalação (uma vez, PowerShell como Administrador)
+
+```powershell
+./deploy/install-scheduled-task.ps1
+```
+
+A tarefa roda como `supra\cloud` em modo S4U, ou seja, funciona mesmo sem sessão interativa aberta
+e sem armazenar senha.
+
+## Deploy via GitHub Actions (bloqueado hoje)
+
+O workflow [`.github/workflows/deploy.yml`](.github/workflows/deploy.yml) está pronto para um runner
+self-hosted e passa a funcionar assim que a rede liberar saída na 443 para
+`*.actions.githubusercontent.com`. Enquanto isso, ele não tem runner disponível e fica na fila.
